@@ -100,7 +100,7 @@ const DirectoryCompany = mongoose.model('DirectoryCompany', directoryCompanySche
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // Serve uploaded files
+app.use('/uploads', express.static(uploadDir)); // Serve uploaded files from dynamic directory
 
 // ==========================================
 // 1. Authentication & Onboarding APIs
@@ -534,9 +534,10 @@ app.post('/api/banners/upload', upload.single('bannerImage'), async (req, res) =
     return res.status(400).json({ success: false, message: 'No image uploaded' });
   }
   try {
+    const hostUrl = req.protocol + '://' + req.get('host');
     const newBanner = new Banner({
       title: req.body.title || 'New Banner',
-      imageUrl: `http://192.168.1.7:3000/uploads/${req.file.filename}`, // Using generic local IP for dev
+      imageUrl: `${hostUrl}/uploads/${req.file.filename}`,
       linkUrl: req.body.linkUrl || "#",
       position: req.body.position || "top",
       adTimer: req.body.adTimer ? parseInt(req.body.adTimer, 10) : 5,

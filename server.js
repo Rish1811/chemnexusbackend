@@ -106,6 +106,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // Serve u
 // 1. Authentication & Onboarding APIs
 // ==========================================
 
+app.get('/', (req, res) => {
+  res.status(200).json({ success: true, message: 'ChemNexus API is running on Netlify!' });
+});
+
 app.post('/api/auth/login', async (req, res) => {
   const { emailOrPhone, password } = req.body;
   if (!emailOrPhone || !password) {

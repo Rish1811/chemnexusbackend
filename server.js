@@ -10,15 +10,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Setup upload directory
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)){
-    fs.mkdirSync(uploadDir);
+let uploadDir = path.join(__dirname, 'uploads');
+try {
+  if (!fs.existsSync(uploadDir)){
+      fs.mkdirSync(uploadDir);
+  }
+} catch (error) {
+  // If running in a read-only environment like Netlify, fallback to /tmp
+  uploadDir = '/tmp/uploads';
+  if (!fs.existsSync(uploadDir)){
+      fs.mkdirSync(uploadDir);
+  }
 }
 
 // Multer config for Banners and Documents
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/')
+    cb(null, uploadDir)
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + path.extname(file.originalname))

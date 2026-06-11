@@ -42,12 +42,14 @@ const registrationSchema = new mongoose.Schema({
   businessDetails: { type: mongoose.Schema.Types.Mixed, default: {} },
   documents: { type: mongoose.Schema.Types.Mixed, default: {} },
   status: { type: String, default: 'UNDER_REVIEW' },
+  rejectionReason: { type: String, default: '' },
   submittedOn: { type: Date, default: Date.now }
 }, { strict: false, minimize: false });
 const Registration = mongoose.model('Registration', registrationSchema);
 
 const bannerSchema = new mongoose.Schema({
   title: String,
+  bannerType: { type: String, enum: ['MAIN', 'HOME'], default: 'MAIN' },
   imageUrl: { type: String, required: true },
   linkUrl: { type: String, default: '#' },
   position: { type: String, default: 'top' },
@@ -61,6 +63,7 @@ const requirementSchema = new mongoose.Schema({
   category: { type: String, required: true },
   interestedUsers: [{ type: String }],
   dealsCompletedUsers: [{ type: String }],
+  isActive: { type: Boolean, default: true },
   postedAt: { type: Date, default: Date.now }
 }, { strict: false });
 const Requirement = mongoose.model('Requirement', requirementSchema);
@@ -96,6 +99,37 @@ const directoryCompanySchema = new mongoose.Schema({
 });
 const DirectoryCompany = mongoose.model('DirectoryCompany', directoryCompanySchema);
 
+const settingSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: { type: mongoose.Schema.Types.Mixed, required: true },
+  updatedAt: { type: Date, default: Date.now }
+});
+const Setting = mongoose.model('Setting', settingSchema);
+
+const policySchema = new mongoose.Schema({
+  type: { type: String, required: true, unique: true }, // 'terms', 'privacy', 'advertisement'
+  title: String,
+  subtitle: String,
+  icon: String,
+  buttonText: String,
+  points: [{
+    id: String,
+    title: String,
+    text: String
+  }],
+  updatedAt: { type: Date, default: Date.now }
+});
+const Policy = mongoose.model('Policy', policySchema);
+
+const faqSchema = new mongoose.Schema({
+  question: { type: String, required: true },
+  answer: { type: String, required: true },
+  isActive: { type: Boolean, default: true },
+  order: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+const Faq = mongoose.model('Faq', faqSchema);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -108,6 +142,119 @@ app.use('/uploads', express.static(uploadDir)); // Serve uploaded files from dyn
 
 app.get('/', (req, res) => {
   res.status(200).json({ success: true, message: 'ChemNexus API is running on Netlify!' });
+});
+
+// ==========================================
+// Policies APIs
+// ==========================================
+app.get('/api/policies/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    let policy = await Policy.findOne({ type });
+
+    // Fallback default structure if not found in DB
+    if (!policy) {
+      let defaultTitle = type === 'terms' ? 'Terms & Conditions' 
+                       : type === 'privacy' ? 'Privacy Policy' 
+                       : type === 'advertisement' ? 'Advertisement Policy' : 'Policy';
+      
+      let defaultIcon = type === 'terms' ? 'shield' 
+                      : type === 'privacy' ? 'lock-shield' 
+                      : 'megaphone';
+      
+      policy = {
+        type,
+        title: defaultTitle,
+        subtitle: `Please read our ${defaultTitle.toLowerCase()} carefully.`,
+        buttonText: 'I Agree & Continue',
+        icon: defaultIcon,
+        points: [
+          { id: '1', title: 'Introduction', text: 'This is a default policy template. Admins can edit this in the Admin Panel.' }
+        ]
+      };
+    }
+    
+    res.status(200).json({ success: true, data: policy });
+  } catch (error) {
+    console.error('Error fetching policy:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.put('/api/admin/policies/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    const policyData = req.body;
+    
+    // Upsert the policy
+    const updatedPolicy = await Policy.findOneAndUpdate(
+      { type },
+      { $set: policyData, updatedAt: new Date() },
+      { new: true, upsert: true }
+    );
+    
+    res.status(200).json({ success: true, message: 'Policy updated successfully', data: updatedPolicy });
+  } catch (error) {
+    console.error('Error updating policy:', error);
+    res.status(500).json({ success: false, message: 'Failed to update policy' });
+  }
+});
+
+// ==========================================
+// FAQ APIs
+// ==========================================
+app.get('/api/faqs', async (req, res) => {
+  try {
+    const faqs = await Faq.find({ isActive: true }).sort({ order: 1, createdAt: -1 });
+    res.status(200).json({ success: true, data: faqs });
+  } catch (error) {
+    console.error('Error fetching FAQs:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/admin/faqs', async (req, res) => {
+  try {
+    const { question, answer, order } = req.body;
+    if (!question || !answer) {
+      return res.status(400).json({ success: false, message: 'Question and answer required' });
+    }
+    const newFaq = new Faq({ question, answer, order: order || 0 });
+    await newFaq.save();
+    res.status(201).json({ success: true, message: 'FAQ created successfully', data: newFaq });
+  } catch (error) {
+    console.error('Error creating FAQ:', error);
+    res.status(500).json({ success: false, message: 'Failed to create FAQ' });
+  }
+});
+
+app.put('/api/admin/faqs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { question, answer, isActive, order } = req.body;
+    const updatedFaq = await Faq.findByIdAndUpdate(
+      id,
+      { $set: { question, answer, isActive, order } },
+      { new: true }
+    );
+    if (!updatedFaq) return res.status(404).json({ success: false, message: 'FAQ not found' });
+    res.status(200).json({ success: true, message: 'FAQ updated successfully', data: updatedFaq });
+  } catch (error) {
+    console.error('Error updating FAQ:', error);
+    res.status(500).json({ success: false, message: 'Failed to update FAQ' });
+  }
+});
+
+app.delete('/api/admin/faqs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deletedFaq = await Faq.findByIdAndDelete(id);
+    if (!deletedFaq) return res.status(404).json({ success: false, message: 'FAQ not found' });
+    res.status(200).json({ success: true, message: 'FAQ deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting FAQ:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete FAQ' });
+  }
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -352,6 +499,52 @@ app.post('/api/auth/signup', upload.fields([
   const applicationId = `CNX-APP-${Date.now()}`;
   
   try {
+    // Check if re-applying (existing application by email or mobile)
+    let existingRegistration = null;
+    if (companyInfo.email) existingRegistration = await Registration.findOne({ "companyInfo.email": companyInfo.email });
+    if (!existingRegistration && companyInfo.mobile) existingRegistration = await Registration.findOne({ "companyInfo.mobile": companyInfo.mobile });
+
+    if (existingRegistration) {
+      existingRegistration.companyInfo = companyInfo;
+      existingRegistration.businessDetails = businessDetails;
+      if (Object.keys(documents).length > 0) {
+        existingRegistration.documents = { ...existingRegistration.documents, ...documents };
+      }
+      existingRegistration.role = req.body.role;
+      existingRegistration.status = "UNDER_REVIEW";
+      existingRegistration.rejectionReason = "";
+      existingRegistration.submittedOn = new Date();
+      await existingRegistration.save();
+
+      await ActivityLog.create({
+        actionType: 'SIGNUP',
+        description: `Re-application submitted: ${companyInfo.companyName || 'Unknown Company'}`,
+        icon: 'refresh'
+      });
+
+      console.log("\n=== REAPPLIED TO MONGODB ===");
+      console.log(existingRegistration);
+      console.log("===============================\n");
+
+      return res.status(200).json({
+        success: true,
+        message: "Application re-submitted successfully",
+        data: {
+          applicationId: existingRegistration.applicationId,
+          status: existingRegistration.status,
+          submittedOn: existingRegistration.submittedOn,
+          token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy.token",
+          user: {
+            id: existingRegistration._id,
+            name: companyInfo.contactName || "User",
+            role: existingRegistration.role,
+            companyName: companyInfo.companyName,
+            isVerified: false
+          }
+        }
+      });
+    }
+
     const newRegistration = await Registration.create({
       applicationId: applicationId,
       role: req.body.role,
@@ -405,7 +598,9 @@ app.get('/api/auth/status', async (req, res) => {
         data: {
           status: latestRegistration.status,
           applicationId: latestRegistration.applicationId,
-          submittedOn: latestRegistration.submittedOn
+          submittedOn: latestRegistration.submittedOn,
+          rejectionReason: latestRegistration.rejectionReason,
+          role: latestRegistration.role
         }
       });
     } else {
@@ -486,9 +681,13 @@ app.post('/api/admin/users/:id/approve', async (req, res) => {
 
 app.post('/api/admin/users/:id/reject', async (req, res) => {
   try {
+    const { reason } = req.body || {};
     const updatedUser = await Registration.findOneAndUpdate(
       { applicationId: req.params.id },
-      { status: "REJECTED" },
+      { 
+        status: "REJECTED",
+        rejectionReason: reason || "Did not meet our selective network requirements."
+      },
       { returnDocument: 'after' }
     );
     
@@ -518,7 +717,11 @@ app.post('/api/admin/users/:id/reject', async (req, res) => {
 // ==========================================
 app.get('/api/banners', async (req, res) => {
   try {
-    const banners = await Banner.find({ isActive: true }).sort({ createdAt: -1 });
+    const query = { isActive: true };
+    if (req.query.type) {
+      query.bannerType = req.query.type;
+    }
+    const banners = await Banner.find(query).sort({ createdAt: -1 });
     res.status(200).json({
       success: true,
       data: banners
@@ -537,6 +740,7 @@ app.post('/api/banners/upload', upload.single('bannerImage'), async (req, res) =
     const hostUrl = req.protocol + '://' + req.get('host');
     const newBanner = new Banner({
       title: req.body.title || 'New Banner',
+      bannerType: req.body.bannerType || 'MAIN',
       imageUrl: `${hostUrl}/uploads/${req.file.filename}`,
       linkUrl: req.body.linkUrl || "#",
       position: req.body.position || "top",
@@ -625,6 +829,18 @@ app.post('/api/requirements/manufacturer/post', (req, res) => handleRequirementP
 
 app.get('/api/requirements', async (req, res) => {
   try {
+    const requirements = await Requirement.find({ isActive: { $ne: false } }).sort({ postedAt: -1 });
+    res.status(200).json({
+      success: true,
+      data: requirements
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error', error: error.message });
+  }
+});
+
+app.get('/api/admin/requirements', async (req, res) => {
+  try {
     const requirements = await Requirement.find().sort({ postedAt: -1 });
     res.status(200).json({
       success: true,
@@ -632,6 +848,30 @@ app.get('/api/requirements', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Database Error', error: error.message });
+  }
+});
+
+app.put('/api/admin/requirements/:id/status', async (req, res) => {
+  try {
+    const requirement = await Requirement.findById(req.params.id);
+    if (!requirement) return res.status(404).json({ success: false, message: 'Requirement not found' });
+    
+    requirement.isActive = req.body.isActive;
+    await requirement.save();
+    
+    res.status(200).json({ success: true, message: 'Requirement status updated', data: requirement });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
+app.delete('/api/admin/requirements/:id', async (req, res) => {
+  try {
+    const requirement = await Requirement.findByIdAndDelete(req.params.id);
+    if (!requirement) return res.status(404).json({ success: false, message: 'Requirement not found' });
+    res.status(200).json({ success: true, message: 'Requirement deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
   }
 });
 
@@ -1151,6 +1391,56 @@ app.get('/api/policies/advertisement', (req, res) => {
       ]
     }
   });
+});
+// ==========================================
+// 5. Settings & Configurations APIs
+// ==========================================
+
+// Get Support Contact (Public)
+app.get('/api/settings/support', async (req, res) => {
+  try {
+    const setting = await Setting.findOne({ key: 'supportContact' });
+    if (setting && setting.value) {
+      res.status(200).json({
+        success: true,
+        data: setting.value
+      });
+    } else {
+      res.status(200).json({
+        success: true,
+        data: {
+          email: 'support@chemnexus.com',
+          phone: '+1 800 123 4567'
+        }
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
+// Update Support Contact (Admin)
+app.post('/api/admin/settings/support', async (req, res) => {
+  try {
+    const { email, phone } = req.body;
+    if (!email || !phone) {
+      return res.status(400).json({ success: false, message: 'Email and phone are required' });
+    }
+
+    const updatedSetting = await Setting.findOneAndUpdate(
+      { key: 'supportContact' },
+      { value: { email, phone }, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Support contact updated successfully',
+      data: updatedSetting.value
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error', error: error.message });
+  }
 });
 
 // Error handling wrapper

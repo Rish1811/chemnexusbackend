@@ -43,6 +43,12 @@ const registrationSchema = new mongoose.Schema({
   documents: { type: mongoose.Schema.Types.Mixed, default: {} },
   status: { type: String, default: 'UNDER_REVIEW' },
   rejectionReason: { type: String, default: '' },
+  subscription: {
+    planType: { type: String, enum: ['FREE_TRIAL', 'PAID', 'NONE'], default: 'NONE' },
+    startDate: Date,
+    endDate: Date,
+    isActive: { type: Boolean, default: false }
+  },
   submittedOn: { type: Date, default: Date.now }
 }, { strict: false, minimize: false });
 const Registration = mongoose.model('Registration', registrationSchema);
@@ -54,6 +60,8 @@ const bannerSchema = new mongoose.Schema({
   linkUrl: { type: String, default: '#' },
   position: { type: String, default: 'top' },
   adTimer: { type: Number, default: 5 },
+  startDate: { type: Date, default: null },
+  endDate: { type: Date, default: null },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
@@ -89,6 +97,7 @@ const directoryCompanySchema = new mongoose.Schema({
   mobile: String,
   email: String,
   website: String,
+  gstNumber: String,
   address: String,
   businessHours: String,
   products: [String],
@@ -372,82 +381,6 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   }
 });
 
-app.get('/api/profile/me', async (req, res) => {
-  try {
-    const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId is required' });
-    }
-
-    // Try finding the actual registration
-    let userRecord;
-    try {
-      userRecord = await Registration.findById(userId);
-    } catch(e) {}
-
-    if (userRecord) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          id: userRecord._id,
-          applicationId: userRecord.applicationId,
-          name: userRecord.companyInfo?.contactName || "User",
-          email: userRecord.companyInfo?.email || "",
-          mobile: userRecord.companyInfo?.mobile || "",
-          role: userRecord.role,
-          companyName: userRecord.companyInfo?.companyName || "Unknown",
-          location: userRecord.companyInfo?.location || "",
-          website: userRecord.companyInfo?.website || "",
-          isVerified: userRecord.status === 'APPROVED',
-          status: userRecord.status,
-          companyInfo: userRecord.companyInfo || {},
-          businessDetails: userRecord.businessDetails || {}
-        }
-      });
-    }
-
-    // Dummy fallback
-    if (userId === "usr_12345") {
-      return res.status(200).json({
-        success: true,
-        data: {
-          id: "usr_12345",
-          applicationId: "CNX-APP-12345",
-          name: "Rishi Patel",
-          email: "rishi@reliance.com",
-          mobile: "9876543210",
-          role: "CHEMICAL_MANUFACTURER",
-          companyName: "Reliance Industries",
-          location: "Mumbai, India",
-          website: "https://reliance.com",
-          isVerified: true,
-          status: "APPROVED",
-          companyInfo: {
-            contactName: "Rishi Patel",
-            email: "rishi@reliance.com",
-            mobile: "9876543210",
-            website: "https://reliance.com",
-            location: "Mumbai, India",
-            gstNumber: "27AABCU9603R1ZM",
-            panNumber: "AABCU9603R",
-            about: "Leading chemical manufacturer in India."
-          },
-          businessDetails: {
-            turnover: "100Cr+",
-            employees: "500-1000",
-            products: ["Methanol", "Ethanol", "Sulfuric Acid"],
-            certifications: ["ISO 9001", "GMP"]
-          }
-        }
-      });
-    }
-
-    res.status(404).json({ success: false, message: 'Profile not found' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Server Error' });
-  }
-});
-
 app.post('/api/auth/signup', upload.fields([
   { name: 'companyProfile', maxCount: 1 },
   { name: 'gstCertificate', maxCount: 1 },
@@ -717,7 +650,14 @@ app.post('/api/admin/users/:id/reject', async (req, res) => {
 // ==========================================
 app.get('/api/banners', async (req, res) => {
   try {
-    const query = { isActive: true };
+    const now = new Date();
+    const query = { 
+      isActive: true,
+      $and: [
+        { $or: [{ startDate: { $exists: false } }, { startDate: null }, { startDate: { $lte: now } }] },
+        { $or: [{ endDate: { $exists: false } }, { endDate: null }, { endDate: { $gte: now } }] }
+      ]
+    };
     if (req.query.type) {
       query.bannerType = req.query.type;
     }
@@ -745,6 +685,8 @@ app.post('/api/banners/upload', upload.single('bannerImage'), async (req, res) =
       linkUrl: req.body.linkUrl || "#",
       position: req.body.position || "top",
       adTimer: req.body.adTimer ? parseInt(req.body.adTimer, 10) : 5,
+      startDate: req.body.startDate ? new Date(req.body.startDate) : null,
+      endDate: req.body.endDate ? new Date(req.body.endDate) : null,
       isActive: true
     });
     await newBanner.save();
@@ -1003,6 +945,7 @@ app.get('/api/admin/live-dashboard', async (req, res) => {
   try {
     // Top Stats
     const totalUsers = await Registration.countDocuments();
+    const totalDirectory = await DirectoryCompany.countDocuments();
     const pendingApprovals = await Registration.countDocuments({ status: 'UNDER_REVIEW' });
     const totalPosts = await Requirement.countDocuments();
     
@@ -1010,10 +953,45 @@ app.get('/api/admin/live-dashboard', async (req, res) => {
     const reqs = await Requirement.find({}, 'interestedUsers');
     const totalInterests = reqs.reduce((acc, curr) => acc + (curr.interestedUsers ? curr.interestedUsers.length : 0), 0);
 
-    // Mocks for features not fully built yet
-    const activeSubscriptions = 1450;
-    const expiredSubscriptions = 82;
-    const contactUnlocks = 15200;
+    // Subscription calculations
+    const allUsers = await Registration.find({}, 'subscription');
+    let freeUsers = 0;
+    let paidUsers = 0;
+    let expiredFreeUsers = 0;
+    let expiredPaidUsers = 0;
+    const now = new Date();
+
+    allUsers.forEach(u => {
+      if (u.subscription && u.subscription.planType && u.subscription.planType !== 'NONE') {
+        const type = u.subscription.planType.toUpperCase();
+        const isActiveStr = u.subscription.isActive;
+        let isActuallyActive = false;
+
+        if (isActiveStr === true || isActiveStr === 'true') {
+          if (u.subscription.endDate) {
+             const end = new Date(u.subscription.endDate);
+             if (end > now) isActuallyActive = true;
+          } else {
+             isActuallyActive = true;
+          }
+        }
+
+        const isFree = type.includes('FREE') || type.includes('TRIAL');
+        const isPaid = type.includes('PAID') || type.includes('PREMIUM');
+
+        if (isActuallyActive) {
+           if (isFree) freeUsers++;
+           if (isPaid) paidUsers++;
+        } else {
+           if (isFree) expiredFreeUsers++;
+           if (isPaid) expiredPaidUsers++;
+        }
+      }
+    });
+
+    const contactUnlocks = freeUsers + paidUsers;
+    const activeSubscriptions = freeUsers + paidUsers;
+    const expiredSubscriptions = expiredFreeUsers + expiredPaidUsers;
     const revenue = 24000;
 
     // Charts Data
@@ -1056,9 +1034,14 @@ app.get('/api/admin/live-dashboard', async (req, res) => {
       data: {
         stats: {
           totalUsers,
+          totalDirectory,
           pendingApprovals,
           activeSubscriptions,
           expiredSubscriptions,
+          freeUsers,
+          paidUsers,
+          expiredFreeUsers,
+          expiredPaidUsers,
           totalPosts,
           totalInterests,
           contactUnlocks,
@@ -1128,6 +1111,7 @@ app.get('/api/directory', async (req, res) => {
         mobile: company.mobile,
         email: company.email,
         website: company.website,
+        gstNumber: company.gstNumber,
         address: company.address,
         businessHours: company.businessHours,
         estYear: company.estYear,
@@ -1161,6 +1145,13 @@ app.post('/api/admin/directory', upload.single('companyLogo'), async (req, res) 
       }
     }
 
+    if (data.gstNumber) {
+      const existingCompany = await DirectoryCompany.findOne({ gstNumber: data.gstNumber });
+      if (existingCompany) {
+        return res.status(400).json({ success: false, message: 'This company is already exist in the Directory' });
+      }
+    }
+
     const newCompany = await DirectoryCompany.create(data);
     
     // Log Activity
@@ -1171,6 +1162,52 @@ app.post('/api/admin/directory', upload.single('companyLogo'), async (req, res) 
     });
 
     res.status(201).json({ success: true, message: 'Directory entry created', data: newCompany });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
+app.put('/api/admin/directory/:id', upload.single('companyLogo'), async (req, res) => {
+  try {
+    const data = { ...req.body };
+    if (req.file) {
+      data.companyLogo = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+    }
+    
+    if (data.products && typeof data.products === 'string') {
+      try {
+        data.products = JSON.parse(data.products);
+      } catch (e) {}
+    }
+
+    const updatedCompany = await DirectoryCompany.findByIdAndUpdate(
+      req.params.id,
+      { $set: data },
+      { new: true }
+    );
+    
+    if (!updatedCompany) return res.status(404).json({ success: false, message: 'Company not found' });
+    
+    res.status(200).json({ success: true, message: 'Directory entry updated', data: updatedCompany });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
+app.delete('/api/admin/directory/:id', async (req, res) => {
+  try {
+    const deletedCompany = await DirectoryCompany.findByIdAndDelete(req.params.id);
+    if (!deletedCompany) return res.status(404).json({ success: false, message: 'Company not found' });
+    
+    await ActivityLog.create({
+      actionType: 'DELETE',
+      description: `Directory removed: ${deletedCompany.companyName}`,
+      icon: 'alert'
+    });
+    
+    res.status(200).json({ success: true, message: 'Directory entry deleted' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Database Error' });
@@ -1219,18 +1256,24 @@ app.get('/api/profile/me', async (req, res) => {
         id: user._id,
         applicationId: user.applicationId,
         name: name,
+        email: companyInfo.email || "",
+        mobile: companyInfo.mobile || "",
+        location: companyInfo.location || "",
+        website: companyInfo.website || "",
         avatarUrl: null,
         avatarInitial: companyName.charAt(0).toUpperCase(),
         companyName: companyName,
         role: user.role,
         isVerified: user.status === 'APPROVED',
+        status: user.status,
         stats: {
           activeLeads: 14,
           connections: 128,
           profileViews: 840
         },
         companyInfo: user.companyInfo || {},
-        businessDetails: user.businessDetails || {}
+        businessDetails: user.businessDetails || {},
+        subscription: user.subscription || { planType: 'NONE', isActive: false }
       }
     });
   } catch (error) {
@@ -1249,6 +1292,43 @@ app.put('/api/profile/me', (req, res) => {
 // ==========================================
 // 6. Admin Panel APIs
 // ==========================================
+
+app.post('/api/admin/users/:applicationId/subscription', async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const { planType, startDate, endDate } = req.body;
+    
+    if (!planType || !startDate || !endDate) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    const user = await Registration.findOne({ applicationId });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    user.subscription = {
+      planType,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      isActive: true
+    };
+    
+    // Also change status to APPROVED automatically if giving a subscription? Wait, just update subscription.
+    await user.save();
+
+    await ActivityLog.create({
+      actionType: 'APPROVE',
+      description: `Subscription ${planType} activated for user ${user.companyInfo?.companyName || applicationId}`,
+      icon: 'check'
+    });
+
+    res.status(200).json({ success: true, message: 'Subscription updated successfully', data: user });
+  } catch (error) {
+    console.error('Subscription error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
 
 app.get('/api/admin/stats', (req, res) => {
   res.status(200).json({

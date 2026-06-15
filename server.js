@@ -645,6 +645,31 @@ app.post('/api/admin/users/:id/reject', async (req, res) => {
   }
 });
 
+app.delete('/api/admin/users/:id', async (req, res) => {
+  try {
+    const deletedUser = await Registration.findOneAndDelete({ applicationId: req.params.id });
+    
+    if (deletedUser) {
+      // Log Activity
+      await ActivityLog.create({
+        actionType: 'DELETE',
+        description: `User deleted: ${deletedUser.companyInfo?.companyName || deletedUser.applicationId}`,
+        icon: 'alert'
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "User deleted successfully",
+        data: deletedUser
+      });
+    } else {
+      res.status(404).json({ success: false, message: "User application not found" });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
 // ==========================================
 // 2. Banner APIs
 // ==========================================

@@ -49,6 +49,7 @@ const registrationSchema = new mongoose.Schema({
     endDate: Date,
     isActive: { type: Boolean, default: false }
   },
+  profileViews: { type: Number, default: 0 },
   submittedOn: { type: Date, default: Date.now }
 }, { strict: false, minimize: false });
 const Registration = mongoose.model('Registration', registrationSchema);
@@ -69,8 +70,13 @@ const Banner = mongoose.model('Banner', bannerSchema);
 
 const requirementSchema = new mongoose.Schema({
   category: { type: String, required: true },
+  message: { type: String }, // Explicitly added message field
+  userId: { type: String },
+  vehicleType: { type: String },
+  vehicleCapacity: { type: String },
   interestedUsers: [{ type: String }],
   dealsCompletedUsers: [{ type: String }],
+  views: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
   postedAt: { type: Date, default: Date.now }
 }, { strict: false });
@@ -869,6 +875,21 @@ app.post('/api/requirements/:id/interest', async (req, res) => {
   }
 });
 
+app.post('/api/requirements/:id/view', async (req, res) => {
+  try {
+    const requirement = await Requirement.findById(req.params.id);
+    if (!requirement) {
+      return res.status(404).json({ success: false, message: 'Requirement not found' });
+    }
+    requirement.views = (requirement.views || 0) + 1;
+    await requirement.save();
+    
+    res.status(200).json({ success: true, message: 'View incremented', views: requirement.views });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
 app.post('/api/requirements/:id/deal', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -1275,6 +1296,18 @@ app.get('/api/profile/me', async (req, res) => {
     const name = companyInfo.contactName || "User";
     const companyName = companyInfo.companyName || "Unknown Company";
 
+    const activeLeads = await Requirement.countDocuments({ userId: user.applicationId });
+
+    const userRequirements = await Requirement.find({ userId: user.applicationId });
+    let connections = 0;
+    userRequirements.forEach(reqDoc => {
+      if (reqDoc.interestedUsers) {
+        connections += reqDoc.interestedUsers.length;
+      }
+    });
+
+    const profileViews = user.profileViews || 0;
+
     res.status(200).json({
       success: true,
       data: {
@@ -1292,9 +1325,9 @@ app.get('/api/profile/me', async (req, res) => {
         isVerified: user.status === 'APPROVED',
         status: user.status,
         stats: {
-          activeLeads: 14,
-          connections: 128,
-          profileViews: 840
+          activeLeads: activeLeads,
+          connections: connections,
+          profileViews: profileViews
         },
         companyInfo: user.companyInfo || {},
         businessDetails: user.businessDetails || {},
@@ -1312,6 +1345,20 @@ app.put('/api/profile/me', (req, res) => {
     success: true,
     message: "Profile updated successfully."
   });
+});
+
+app.post('/api/users/:applicationId/profile-view', async (req, res) => {
+  try {
+    const user = await Registration.findOne({ applicationId: req.params.applicationId });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    
+    user.profileViews = (user.profileViews || 0) + 1;
+    await user.save();
+    
+    res.status(200).json({ success: true, message: 'Profile view incremented', data: user.profileViews });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
 });
 
 // ==========================================

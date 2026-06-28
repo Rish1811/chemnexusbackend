@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 // Setup upload directory
 let uploadDir = path.join(__dirname, 'uploads');
@@ -559,7 +559,7 @@ app.get('/api/auth/status', async (req, res) => {
 
 // ==========================================
 // 1.5. Admin User Management APIs
-// ==========================================
+// ========================================== 
 
 app.post('/api/admin/login', (req, res) => {
   const { email, password } = req.body;

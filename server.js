@@ -287,42 +287,32 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
     if (userRecord) {
-      return res.status(200).json({
-        success: true,
-        message: "Login successful",
-        data: {
-          token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy.token",
-          user: {
-            id: userRecord._id,
-            name: userRecord.companyInfo?.contactName || "User",
-            role: userRecord.role,
-            companyName: userRecord.companyInfo?.companyName,
-            isVerified: userRecord.status === 'APPROVED',
-            status: userRecord.status
+      if (userRecord.companyInfo && userRecord.companyInfo.password === password) {
+        return res.status(200).json({
+          success: true,
+          message: "Login successful",
+          data: {
+            token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy.token",
+            user: {
+              id: userRecord._id,
+              name: userRecord.companyInfo?.contactName || "User",
+              role: userRecord.role,
+              companyName: userRecord.companyInfo?.companyName,
+              isVerified: userRecord.status === 'APPROVED',
+              status: userRecord.status
+            }
           }
-        }
-      });
-    }
-  } catch (error) {
-    console.error("Login DB Error:", error);
-  }
-
-  // Fallback dummy
-  res.status(200).json({
-    success: true,
-    message: "Login successful",
-    data: {
-      token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy.token",
-      user: {
-        id: "usr_12345",
-        name: "Rishi Patel",
-        role: "CHEMICAL_MANUFACTURER",
-        companyName: "Reliance Industries",
-        isVerified: true,
-        status: "APPROVED"
+        });
+      } else {
+        return res.status(401).json({ success: false, message: 'Invalid email or password' });
       }
     }
-  });
+    
+    return res.status(401).json({ success: false, message: 'User not found' });
+  } catch (error) {
+    console.error("Login DB Error:", error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
 app.post('/api/auth/send-otp', (req, res) => {
@@ -407,6 +397,7 @@ app.post('/api/auth/signup', upload.fields([
     contactName: req.body.contactName,
     mobile: req.body.mobile,
     email: req.body.email,
+    password: req.body.password,
     gstNumber: req.body.gstNumber,
     panNumber: req.body.panNumber,
     location: req.body.location,
@@ -561,19 +552,78 @@ app.get('/api/auth/status', async (req, res) => {
 // 1.5. Admin User Management APIs
 // ========================================== 
 
-app.post('/api/admin/login', (req, res) => {
-  const { email, password } = req.body;
-  if (email === 'admin@chemnexus.com' && password === 'admin123') {
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    let adminCreds = await Setting.findOne({ key: 'adminCredentials' });
+    
+    // Fallback to default if not set in DB
+    const expectedEmail = adminCreds && adminCreds.value && adminCreds.value.email ? adminCreds.value.email : 'admin@chemnexus.com';
+    const expectedPassword = adminCreds && adminCreds.value && adminCreds.value.password ? adminCreds.value.password : 'admin123';
+
+    // Allow login with dynamic credentials OR the dummy fallback credentials
+    const isDynamicMatch = email === expectedEmail && password === expectedPassword;
+    const isDummyMatch = email === 'admin@chemnexus.com' && password === 'admin123';
+
+    if (isDynamicMatch || isDummyMatch) {
+      res.status(200).json({
+        success: true,
+        message: 'Admin login successful',
+        data: {
+          token: 'admin_dummy_token_123',
+          admin: { email: email, role: 'SUPER_ADMIN' }
+        }
+      });
+    } else {
+      res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server Error' });
+  }
+});
+
+app.get('/api/admin/profile', async (req, res) => {
+  try {
+    let adminCreds = await Setting.findOne({ key: 'adminCredentials' });
+    
+    const email = adminCreds && adminCreds.value && adminCreds.value.email ? adminCreds.value.email : 'admin@chemnexus.com';
+    const password = adminCreds && adminCreds.value && adminCreds.value.password ? adminCreds.value.password : 'admin123';
+    
     res.status(200).json({
       success: true,
-      message: 'Admin login successful',
       data: {
-        token: 'admin_dummy_token_123',
-        admin: { email: 'admin@chemnexus.com', role: 'SUPER_ADMIN' }
+        name: "Super Admin",
+        id: "ADM-99842",
+        email: email,
+        password: password,
+        role: "System Administrator",
+        avatarInitial: "A"
       }
     });
-  } else {
-    res.status(401).json({ success: false, message: 'Invalid email or password' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error' });
+  }
+});
+
+app.post('/api/admin/profile/update', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: 'Email and password are required' });
+    }
+
+    await Setting.findOneAndUpdate(
+      { key: 'adminCredentials' },
+      { value: { email, password }, updatedAt: Date.now() },
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Admin credentials updated successfully'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Database Error', error: error.message });
   }
 });
 
